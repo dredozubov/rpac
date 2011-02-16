@@ -23,6 +23,7 @@ USER_PERMISSIONS = {
                             'exclude': ['ping']
                         },
                     'keys':
-                        []
+                        [],
+                    'password': 'foobared' # password must be unique for each client - probably i should fix it
                 }
         }
