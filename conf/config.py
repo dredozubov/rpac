@@ -9,7 +9,7 @@ PORT = 8910
 # permissions - commands and keys accepted for all users, unless stated otherwise in USERS section
 DEFAULT_PERMISSIONS = {
             'commands':
-                    ['ping'],
+                    ['PING'],
             'keys':
                     ['keyA', 'keyB']
           }
@@ -19,8 +19,8 @@ USER_PERMISSIONS = {
                 {
                     'commands':
                         {
-                            'accept': ['get','set'],
-                            'exclude': ['ping']
+                            'accept': ['GET','SET'],
+                            'exclude': ['PING']
                         },
                     'keys':
                         [],

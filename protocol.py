@@ -1,6 +1,7 @@
 #! -*- coding: utf-8 -*-
 from twisted.protocols.basic import LineOnlyReceiver
 import re
+import logging
 
 class ConfigParser(object):
 
@@ -35,7 +36,7 @@ class ConfigParser(object):
     def getConfigByPassword(self, password):
         config = {}
         try:
-            config['user'] = self.USER_PASSWORDS[password]
+            config['user'] = user = self.USER_PASSWORDS[password]
             config['password'] = password
             config['commands'] = self.USER_COMMANDS[user]
             config['keys'] = self.USER_KEYS[user]
@@ -52,6 +53,8 @@ class RedisAuthProxy(LineOnlyReceiver):
         self.ready = True # ready to parse next command
         self.authorized = False # is authorized
         self.config = ConfigParser()
+        self.command = u'' # internal command buffer
+        self.re_arg = re.compile('^\*(\d)')
         self.SINGLE_LINE_RESPONSE = ['PING', ' SET', ' SELECT', ' SAVE', ' BGSAVE', ' SHUTDOWN', ' RENAME', ' LPUSH', ' RPUSH', ' LSET', ' LTRIM']
 
     def connectionMade(self):
@@ -61,54 +64,49 @@ class RedisAuthProxy(LineOnlyReceiver):
         """
             Socket input parsing via redis network protocol
         """
-        print 'line: ', line
-        if self.ready and line.startswith('*'):
-            self.arguments_number = int(line[1:])-1
-            self.get_command = True
-            self.ready = False
-
-        elif self.get_command and not line.startswith('$'):
-            self.command = line
-            if not self.authorized and self.command != 'AUTH':
-                self.sendLine('-NOTAUTHORIZED')
-            self.get_command = False
-
-        elif not self.get_command and self.arguments_number and not self.ready:
-            self.args.append(line)
-            self.arguments_number -= 1
-            if self.authorized:
-                self.proxy_execute(command, args)
-                self.ready = True
-                self.args = []
-            else:
-                # first command - authorization
-                print 'self.args: ', self.args
-                password = self.args[-1]
-                self.authClient(password)
-
-        else:
-            raise self.WrongCommand
-
+        self.command += line
+        args = self.re_arg.match(self.command)
+        if args:
+            repeats = unicode(int(args.groups()[0])-1)
+            regex = re.compile('^\*\d\$\d+([a-zA-Z]+)(?:\$\d+(\w+)){%s}' % (repeats,))
+            m = regex.match(self.command)
+            print 'self.command: ', self.command
+            if m:
+                self.command = self.command[m.end():]
+                matches = m.groups()
+                command = matches[0]
+                arguments = matches[1:]
+                print 'command %s arguments %s' % (command, ' '.join(arguments))
+                if command == 'AUTH' and not self.authorized:
+                    # authorization
+                    password = arguments[0]
+                    self.authClient(password)
+                elif self.authorized:
+                    proxyExecute(command, arguments)
 
     def authClient(self, password):
         """
             Authorization procedure
         """
-        print 'password: ', password
         self.userconfig = self.config.getConfigByPassword(password)
         if self.userconfig:
             self.sendLine('+OK')
+            print 'authorized!'
         else:
-            self.sendLine('-AUTHERROR')
+            self.sendLine('-ERR')
+            raise self.AuthError
 
     def proxyExecute(self, command, args):
         """
             Command execution via python redis_client and sending results back to proxy client.
         """
-        raise NotImplemented
+        self.sendLine('+OK')
 
     class RedisError(Exception):
         pass
 
     class WrongCommand(RedisError):
+        pass
+
+    class AuthError(RedisError):
         pass
