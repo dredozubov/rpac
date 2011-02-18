@@ -133,7 +133,11 @@ class RedisAuthProxy(LineOnlyReceiver):
         self.redis = RedisProxy(host=self.config.REDIS_HOST, port=self.config.REDIS_PORT, db=self.config.REDIS_DB)
 
     def sendLine(self, line):
-        abstract.FileDescriptor.write(self.transport, line+self.delimiter)
+        #abstract.FileDescriptor.write(self.transport, line+self.delimiter)
+        print 'in sendLine'
+        print 'type: ', type(line)
+        print 'line: ', repr(line)
+        abstract.FileDescriptor.write(self.transport, line.rstrip('\r\n')+self.delimiter)
 
     def lineReceived(self, line):
         """
