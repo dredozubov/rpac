@@ -1,6 +1,9 @@
 #! -*- coding: utf-8 -*-
 from twisted.protocols.basic import LineOnlyReceiver
-from redis import Redis, ResponseError
+from twisted.internet.tcp import Server
+from twisted.internet import abstract
+from redis import Redis, ResponseError, ConnectionError
+import time
 import re
 import logging
 
@@ -48,20 +51,68 @@ class ConfigParser(object):
 
 
 class RedisProxy(Redis):
+    """
+        Redis client used by RedisAuthProxy
+    """
 
     def parse_response(self, command_name, catch_errors=False, **options):
-        if hasattr(self, 'res_data'):
-            print 'self.data: ', self.res_data
         response = self._parse_response(command_name, catch_errors)
         self.res_data = response
+        print 'self.res_data: ', repr(self.res_data)
         return
 
-    def _parse_response(self, command_name, catch_errors=True):
+    def _parse_response(self, command_name, catch_errors=False):
         conn = self.connection
-        response = conn.read() # strip last two characters (\r\n)
-        return response
+        response = conn.read()
+        if not response:
+            self.connection.disconnect()
+            self.res_data = "-ERR Socket closed on remote end"
+
+        # server returned a null value
+        if response in ('$-1', '*-1'):
+            return None
+
+        byte, response = response[0], response[1:]
+        # bulk response
+        if byte == '$':
+            length = int(response)
+            if length == -1:
+                return None
+            response = length and conn.read(length) or ''
+            return byte+str(length)+'\r\n'+response
+
+        # multi-bulk response
+        if byte == '*':
+            print 'multi-bulk'
+            length = int(response)
+            if length == -1:
+                return None
+            if not catch_errors:
+                return [self._parse_response(command_name, catch_errors) for i in range(length)]
+            else:
+                # for pipelines, we need to read everything,
+                # including response errors. otherwise we'd
+                # completely mess up the receive buffer
+                data = []
+                for i in range(length):
+                    try:
+                        data.append(
+                            self._parse_response(command_name, catch_errors)
+                            )
+                    except Exception, e:
+                        data.append(e)
+                print 'returning multi-bulk data'
+                return byte+data
+
+        print 'returning byte+response'
+        return byte+response
+
+
 
 class RedisAuthProxy(LineOnlyReceiver):
+    """
+        Twisted server class
+    """
 
     def __init__(self, *args, **kwargs):
         self.delimiter = '\r\n' # explicitly
@@ -81,6 +132,9 @@ class RedisAuthProxy(LineOnlyReceiver):
         # client is connected to proxy, time to connect to redis itself
         self.redis = RedisProxy(host=self.config.REDIS_HOST, port=self.config.REDIS_PORT, db=self.config.REDIS_DB)
 
+    def sendLine(self, line):
+        abstract.FileDescriptor.write(self.transport, line+self.delimiter)
+
     def lineReceived(self, line):
         """
             Socket input parsing via redis network protocol
@@ -88,9 +142,9 @@ class RedisAuthProxy(LineOnlyReceiver):
         self.command += line+'\r\n'
         args = self.re_arg.match(self.command)
         if args:
-            repeats = unicode(int(args.groups()[0])-1)
+            repeats = int(args.groups()[0])-1
             # DL for delimiter
-            regex = re.compile('^\*\dDL\$\d+DL([a-zA-Z]+)DL(?:\$\d+DL(\w+)DL){%s}'.replace('DL', '\r\n') % (repeats,))
+            regex = re.compile(str('^\*\dDL\$\d+DL([a-zA-Z]+)DL'+'\$\d+DL(\w+)DL'*repeats).replace('DL', '\r\n'))
             m = regex.match(self.command)
             if m:
                 self.command = self.command[m.end():]
@@ -116,8 +170,9 @@ class RedisAuthProxy(LineOnlyReceiver):
                     password = arguments[0]
                     self.authClient(password)
                 elif self.authorized:
+                    # permissions check
                     if command.upper() in self.config.USER_COMMANDS[self.userconfig['user']]:
-                        print 'proExecute(command): ', m.groups()
+                        print 'proxyExecute(command): ', m.groups()
                         self.proxyExecute(m.groups())
                     else:
                         self.sendLine('-ERR restricted command: %s' % command.upper())
@@ -133,6 +188,7 @@ class RedisAuthProxy(LineOnlyReceiver):
             Authorization procedure
         """
         self.userconfig = self.config.getConfigByPassword(password)
+        # if self.userconfig exists - user exists
         if self.userconfig:
             self.sendLine('+OK')
             self.authorized = True
@@ -146,12 +202,15 @@ class RedisAuthProxy(LineOnlyReceiver):
 
     def proxyExecute(self, command):
         """
-            Command execution via python redis_client and sending results back to proxy client.
+            Command execution via RedisProxy and sending results back to client.
         """
         self.redis.execute_command(*command)
+        print 'after execute_command(): ', time.time()
         # this condition must include non-recv commands support etc
-        if self.redis.res_data:
+        if hasattr(self.redis, 'res_data'):
             self.sendLine(self.redis.res_data)
+        else:
+            self.sendLine('-ERR wrong command')
 
     class RedisError(Exception):
         pass
