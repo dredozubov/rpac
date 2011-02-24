@@ -3,51 +3,10 @@ from twisted.protocols.basic import LineOnlyReceiver
 from twisted.internet.tcp import Server
 from twisted.internet import abstract
 from redis import Redis, ResponseError, ConnectionError
+from rpac.conf.parser import ConfigParser
 import time
 import re
 import logging
-
-class ConfigParser(object):
-
-    def __init__(self, *args, **kwargs):
-        from rpac.conf.config import REDIS_HOST, REDIS_PORT, REDIS_DB, DEFAULT_PERMISSIONS, USER_PERMISSIONS, PORT, TEST_PORT
-        self.REDIS_HOST = REDIS_HOST
-        self.REDIS_PORT = REDIS_PORT
-        self.REDIS_DB = REDIS_DB
-        self.TEST_PORT = TEST_PORT
-        self.PORT = PORT
-        self.USER_COMMANDS = {}
-        self.USER_KEYS = {}
-        self.USER_PASSWORDS = {}
-        self.__calculate_permissions(USER_PERMISSIONS, DEFAULT_PERMISSIONS)
-
-    def __calculate_permissions(self, users, default):
-        global_commands = set(default['commands'])
-        global_keys = set(default['keys'])
-        for user in users.keys():
-            # user commands permissions
-            accepted_commands = set(users[user]['commands']['accept'])
-            excluded_commands = set(users[user]['commands']['exclude'])
-            user_can_do = accepted_commands.union(global_commands).symmetric_difference(excluded_commands)
-            self.USER_COMMANDS[user] = user_can_do
-            # user keys permissions
-            accepted_keys = set(users[user]['commands']['accept'])
-            excluded_keys = set(users[user]['commands']['exclude'])
-            user_can_do_with = accepted_keys.union(global_commands).symmetric_difference(excluded_keys)
-            self.USER_KEYS[user] = user_can_do
-            # user passwords
-            self.USER_PASSWORDS[users[user]['password']] = user # keys are passwords
-
-    def getConfigByPassword(self, password):
-        config = {}
-        try:
-            config['user'] = user = self.USER_PASSWORDS[password]
-            config['password'] = password
-            config['commands'] = self.USER_COMMANDS[user]
-            config['keys'] = self.USER_KEYS[user]
-        except KeyError:
-            pass
-        return config
 
 
 class RedisProxy(Redis):
@@ -57,6 +16,7 @@ class RedisProxy(Redis):
 
     def parse_response(self, command_name, catch_errors=False, **options):
         response = self._parse_response(command_name, catch_errors)
+        print 'RESPONSE: ', response
         self.res_data = response
         print 'self.res_data: ', repr(self.res_data)
         return
@@ -88,6 +48,7 @@ class RedisProxy(Redis):
             if length == -1:
                 return None
             if not catch_errors:
+                print 'errors'
                 return [self._parse_response(command_name, catch_errors) for i in range(length)]
             else:
                 # for pipelines, we need to read everything,
@@ -115,12 +76,12 @@ class RedisAuthProxy(LineOnlyReceiver):
     """
 
     def __init__(self, *args, **kwargs):
-        self.delimiter = '\r\n' # explicitly
+        self.delimiter = str('\r\n') # explicitly
         self.args = [] # arguments for current command
         self.ready = True # ready to parse next command
         self.authorized = False # is authorized
         self.config = ConfigParser()
-        self.command = u'' # internal command buffer
+        self.command = '' # internal command buffer
         self.re_arg = re.compile('^\*(\d)')
         self.SINGLE_LINE_RESPONSE = ['PING', ' SET', ' SELECT', ' SAVE', ' BGSAVE', ' SHUTDOWN', ' RENAME', ' LPUSH', ' RPUSH', ' LSET', ' LTRIM']
         self.NOT_RECV_COMMANDS = set(['SUBSCRIBE', 'UNSUBSCRIBE', 'PSUBSCRIBE', 'PUNSUBSCRIBE'])
@@ -128,33 +89,46 @@ class RedisAuthProxy(LineOnlyReceiver):
     def resetCommandBuffer(self):
         self.command = u''
 
-    def connectionMade(self):
+    def connectToRedis(self):
         # client is connected to proxy, time to connect to redis itself
         self.redis = RedisProxy(host=self.config.REDIS_HOST, port=self.config.REDIS_PORT, db=self.config.REDIS_DB)
+        from time import gmtime
+        self.redis.lpush('time', str(gmtime()))
 
     def sendLine(self, line):
-        #abstract.FileDescriptor.write(self.transport, line+self.delimiter)
-        print 'in sendLine'
-        print 'type: ', type(line)
-        print 'line: ', repr(line)
-        abstract.FileDescriptor.write(self.transport, line.rstrip('\r\n')+self.delimiter)
+        if not line:
+            line = '$-1'
+        if type(line) == 'unicode':
+            line = self.safe_unicode(line).encode('utf-8')
+        print type(line)
+        print line
+        abstract.FileDescriptor.write(self.transport, str(line.rstrip('\r\n')+self.delimiter))
+
+    def sendTerminate(self):
+        abstract.FileDescriptor.write(self.transport, self.delimiter)
 
     def lineReceived(self, line):
         """
             Socket input parsing via redis network protocol
         """
+        print 'received: ', line
         self.command += line+'\r\n'
         args = self.re_arg.match(self.command)
         if args:
             repeats = int(args.groups()[0])-1
             # DL for delimiter
-            regex = re.compile(str('^\*\dDL\$\d+DL([a-zA-Z]+)DL'+'\$\d+DL(\w+)DL'*repeats).replace('DL', '\r\n'))
+            acceptable_range = u'\wАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъьэюя'
+            arg_repeats = unicode('\$\d+DL(['+acceptable_range+']+)DL')*repeats
+            re_val = unicode('^\*\dDL\$\d+DL([a-zA-Z]+)DL'+arg_repeats).replace('DL', '\r\n').encode('utf-8')
+            print repr(re_val)
+            regex = re.compile(re_val)
             m = regex.match(self.command)
+            print 'm: ', m
             if m:
                 self.command = self.command[m.end():]
                 matches = [c for c in m.groups() if c is not None]
-                command = unicode(matches[0])
-
+                # twisted breaks while sending unicode, so..
+                command = matches[0].encode('utf-8')
                 if len(matches) > 1:
                     arguments = list(matches[1:])
                 else:
@@ -169,7 +143,7 @@ class RedisAuthProxy(LineOnlyReceiver):
                 elif command:
                     print command
 
-                if command == 'AUTH' and not self.authorized:
+                if command in ['AUTH', 'auth'] and not self.authorized:
                     # authorization
                     password = arguments[0]
                     self.authClient(password)
@@ -182,10 +156,6 @@ class RedisAuthProxy(LineOnlyReceiver):
                         self.sendLine('-ERR restricted command: %s' % command.upper())
                 else:
                     self.sendLine('-ERR authorization denied')
-                    try:
-                        raise self.AuthError
-                    finally:
-                        self.redis.connection.disconnect()
 
     def authClient(self, password):
         """
@@ -196,13 +166,11 @@ class RedisAuthProxy(LineOnlyReceiver):
         if self.userconfig:
             self.sendLine('+OK')
             self.authorized = True
+            self.connectToRedis()
             print 'authorized!'
         else:
-            self.sendLine('-ERR authorization denied')
-            try:
-                raise self.AuthError
-            finally:
-                self.redis.connection.disconnect()
+            self.sendLine('-ERR invalid password')
+            print 'not authorized!'
 
     def proxyExecute(self, command):
         """
@@ -217,9 +185,6 @@ class RedisAuthProxy(LineOnlyReceiver):
             self.sendLine('-ERR wrong command')
 
     class RedisError(Exception):
-        pass
-
-    class WrongCommand(RedisError):
         pass
 
     class AuthError(RedisError):
