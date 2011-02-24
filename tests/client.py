@@ -109,10 +109,10 @@ def report(counter, title):
 def __run_tests(number_of_tries=1):
     auth_valid_routine(TEST_HOST, TEST_PORT, VALID_PASSWORD)
     auth_invalid_routine(TEST_HOST, TEST_PORT, INVALID_PASSWORD)
-    if VALID_AUTH_ERRORS['number']:
-        import sys
-        print 'No need to continue, can\'t authorize user with password %s' % VALID_PASSWORD
-        sys.exit()
+    #if VALID_AUTH_ERRORS['number']:
+        #import sys
+        #print 'No need to continue, can\'t authorize user with password %s' % VALID_PASSWORD
+        #sys.exit()
     for x in xrange(number_of_tries):
         commands_valid_routine(TEST_HOST, TEST_PORT, VALID_PASSWORD, VALID_COMMANDS)
     for x in xrange(number_of_tries):

@@ -12,10 +12,12 @@ TEST_PORT = 8910
 PORT = 8910
 # permissions - commands and keys accepted for all users, unless stated otherwise in USERS section
 DEFAULT_PERMISSIONS = {
-            'commands':
-                    ['PING', 'SELECT', 'ZADD'],
+            'commands_accepted':
+                    ['PING', 'SELECT', 'ZADD', 'QUIT'],
+            'commands_denied':
+                    ['MULTI', 'EXEC', 'DISCARD', 'WATCH', 'UNWATCH', 'FLUSHDB', 'FLUSHALL', 'INFO', 'MONITOR', 'SLAVEOF', 'CONFIG'],
             'keys':
-                    ['keyA', 'keyB', 'TEST']
+                    ['keyA', 'keyB', 'TEST'],
           }
 # permissions per user - make additions to DEFAULT and overrides it if needed
 USER_PERMISSIONS = {
@@ -26,8 +28,7 @@ USER_PERMISSIONS = {
                             'accept': ['GET','SET', 'LPUSH'],
                             'exclude': ['ZADD']
                         },
-                    'keys':
-                        [],
+                    'keys': [],
                     'password': 'foobared' # password must be unique for each client - probably i should fix it
                 },
 
@@ -38,8 +39,7 @@ USER_PERMISSIONS = {
                             'accept': ['GET','SET', 'LPUSH', 'RPOP'],
                             'exclude': ['ZADD']
                         },
-                    'keys':
-                        ['TEST_KEY', 'TEST_KEY_2'],
+                    'keys': ['TESTLIST'],
                     'password': 'testbared'
                 }
         }

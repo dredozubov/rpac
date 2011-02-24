@@ -72,7 +72,7 @@ class RedisProxy(Redis):
 
 class RedisAuthProxy(LineOnlyReceiver):
     """
-        Twisted server class
+        Twisted Protocol class
     """
 
     def __init__(self, *args, **kwargs):
@@ -83,8 +83,11 @@ class RedisAuthProxy(LineOnlyReceiver):
         self.config = ConfigParser()
         self.command = '' # internal command buffer
         self.re_arg = re.compile('^\*(\d)')
-        self.SINGLE_LINE_RESPONSE = ['PING', ' SET', ' SELECT', ' SAVE', ' BGSAVE', ' SHUTDOWN', ' RENAME', ' LPUSH', ' RPUSH', ' LSET', ' LTRIM']
-        self.NOT_RECV_COMMANDS = set(['SUBSCRIBE', 'UNSUBSCRIBE', 'PSUBSCRIBE', 'PUNSUBSCRIBE'])
+        #self.SINGLE_LINE_RESPONSE = ['PING', ' SET', ' SELECT', ' SAVE', ' BGSAVE', ' SHUTDOWN', ' RENAME', ' LPUSH', ' RPUSH', ' LSET', ' LTRIM']
+        #self.NOT_RECV_COMMANDS = ['SUBSCRIBE', 'UNSUBSCRIBE', 'PSUBSCRIBE', 'PUNSUBSCRIBE']
+        self.BLOCKING_COMMANDS = ['BLPOP', 'BRPOP', 'SMOVE']
+        self.ALL_KEYS_COMMANDS = ['DEL', 'MGET', 'SINTER', 'SINTERSTORE', 'SUNION', 'SUNIONSTORE', 'SDIFF', 'SDIFFSTORE', 'RENAME', 'RENAMENX']
+        self.KEYLESS_COMMANDS = ['PING', 'DBSIZE', 'SELECT', 'FLUSHDB', 'FLUSHALL', 'AUTH']
 
     def resetCommandBuffer(self):
         self.command = u''
@@ -94,6 +97,51 @@ class RedisAuthProxy(LineOnlyReceiver):
         self.redis = RedisProxy(host=self.config.REDIS_HOST, port=self.config.REDIS_PORT, db=self.config.REDIS_DB)
         from time import gmtime
         self.redis.lpush('time', str(gmtime()))
+
+    def checkCommand(self, command):
+        if command.upper() in self.config.USER_COMMANDS[self.userconfig['user']]:
+            return True
+        else:
+            return
+
+    def __checkKeys(self, arguments):
+        restricted_keys = []
+        for argument in arguments:
+            if argument not in self.userconfig['keys']:
+                restricted_keys.append(argument)
+        return restricted_keys
+
+    def checkKeys(self, command, arguments):
+        checked = None
+        print 'USER KEYS', self.userconfig['keys']
+        if command in ['MSET', 'MSETNX']:
+            # our main interest is arguments with odd indexes
+            restricted_keys = self.__checkKeys(arguments[::2])
+        elif command in self.ALL_KEYS_COMMANDS:
+            # we must check all arguments
+            restricted_keys = self.__checkKeys(arguments)
+        else:
+            restricted_keys = self.__checkKeys([arguments[0]])
+        return restricted_keys
+
+    def checkPermissions(self, command_list):
+        command = command_list[0]
+        arguments = command_list[1:]
+        if self.checkCommand(command):
+            if command not in self.KEYLESS_COMMANDS:
+                restricted_keys = self.checkKeys(command, arguments)
+            else:
+                restricted_keys = []
+            if not restricted_keys:
+                print 'proxyExecute(command): ', command_list
+                self.proxyExecute(command_list)
+            else:
+                self.sendLine('-ERR restricted keys: %s' % ' '.join(restricted_keys))
+        elif command in self.BLOCKING_COMMANDS:
+            # in case it'll be removed in config.py
+            self.sendLine('-ERR blocking commands restricted: %s' % command.upper())
+        else:
+            self.sendLine('-ERR restricted command: %s' % command.upper())
 
     def sendLine(self, line):
         if not line:
@@ -120,10 +168,8 @@ class RedisAuthProxy(LineOnlyReceiver):
             acceptable_range = u'\wАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъьэюя'
             arg_repeats = unicode('\$\d+DL(['+acceptable_range+']+)DL')*repeats
             re_val = unicode('^\*\dDL\$\d+DL([a-zA-Z]+)DL'+arg_repeats).replace('DL', '\r\n').encode('utf-8')
-            print repr(re_val)
-            regex = re.compile(re_val)
+            regex = re.compile(re_val) # can't replicate effect of acceptable_range with re.U, dunno why
             m = regex.match(self.command)
-            print 'm: ', m
             if m:
                 self.command = self.command[m.end():]
                 matches = [c for c in m.groups() if c is not None]
@@ -148,13 +194,9 @@ class RedisAuthProxy(LineOnlyReceiver):
                     password = arguments[0]
                     self.authClient(password)
                 elif self.authorized:
-                    # permissions check
-                    if command.upper() in self.config.USER_COMMANDS[self.userconfig['user']]:
-                        print 'proxyExecute(command): ', m.groups()
-                        self.proxyExecute(m.groups())
-                    else:
-                        self.sendLine('-ERR restricted command: %s' % command.upper())
+                    self.checkPermissions(m.groups())
                 else:
+                    print self.authorized
                     self.sendLine('-ERR authorization denied')
 
     def authClient(self, password):
