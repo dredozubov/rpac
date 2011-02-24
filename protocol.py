@@ -10,13 +10,13 @@ import logging
 
 
 class RedisProxy(Redis):
+
     """
         Redis client used by RedisAuthProxy
     """
 
     def parse_response(self, command_name, catch_errors=False, **options):
         response = self._parse_response(command_name, catch_errors)
-        print 'RESPONSE: ', response
         self.res_data = response
         print 'self.res_data: ', repr(self.res_data)
         return
@@ -43,7 +43,6 @@ class RedisProxy(Redis):
 
         # multi-bulk response
         if byte == '*':
-            print 'multi-bulk'
             length = int(response)
             if length == -1:
                 return None
@@ -62,10 +61,8 @@ class RedisProxy(Redis):
                             )
                     except Exception, e:
                         data.append(e)
-                print 'returning multi-bulk data'
                 return byte+data
 
-        print 'returning byte+response'
         return byte+response
 
 
@@ -159,7 +156,6 @@ class RedisAuthProxy(LineOnlyReceiver):
         """
             Socket input parsing via redis network protocol
         """
-        print 'received: ', line
         self.command += line+'\r\n'
         args = self.re_arg.match(self.command)
         if args:
@@ -180,9 +176,6 @@ class RedisAuthProxy(LineOnlyReceiver):
                 else:
                     arguments = None
 
-                print 'command: ', command
-                print 'arguments: ', arguments
-
                 # printing
                 if arguments:
                     print '%s %s' % (command, ' '.join(arguments))
@@ -196,7 +189,6 @@ class RedisAuthProxy(LineOnlyReceiver):
                 elif self.authorized:
                     self.checkPermissions(m.groups())
                 else:
-                    print self.authorized
                     self.sendLine('-ERR authorization denied')
 
     def authClient(self, password):
@@ -219,7 +211,6 @@ class RedisAuthProxy(LineOnlyReceiver):
             Command execution via RedisProxy and sending results back to client.
         """
         self.redis.execute_command(*command)
-        print 'after execute_command(): ', time.time()
         # this condition must include non-recv commands support etc
         if hasattr(self.redis, 'res_data'):
             self.sendLine(self.redis.res_data)
