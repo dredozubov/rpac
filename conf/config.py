@@ -16,8 +16,10 @@ DEFAULT_PERMISSIONS = {
                     ['PING', 'SELECT', 'ZADD', 'QUIT'],
             'commands_denied':
                     ['MULTI', 'EXEC', 'DISCARD', 'WATCH', 'UNWATCH', 'FLUSHDB', 'FLUSHALL', 'INFO', 'MONITOR', 'SLAVEOF', 'CONFIG'],
-            'keys':
+            'exact_keys':
                     ['keyA', 'keyB', 'TEST'],
+            'startswith_keys':
+                    ['public::'],
           }
 # permissions per user - make additions to DEFAULT and overrides it if needed
 USER_PERMISSIONS = {
@@ -26,9 +28,10 @@ USER_PERMISSIONS = {
                     'commands':
                         {
                             'accept': ['GET','SET', 'LPUSH'],
-                            'exclude': ['ZADD']
+                            'exclude': ['ZADD'],
                         },
-                    'keys': [],
+                    'exact_keys': [],
+                    'startswith_keys': [],
                     'password': 'foobared' # password must be unique for each client - probably i should fix it
                 },
 
@@ -39,7 +42,8 @@ USER_PERMISSIONS = {
                             'accept': ['GET','SET', 'LPUSH', 'RPOP'],
                             'exclude': ['ZADD']
                         },
-                    'keys': ['TESTLIST'],
+                    'exact_keys': ['TESTLIST', 'TEST_KEY', 'TEST_KEY_2'],
+                    'startswith_keys': ['TestUser::'],
                     'password': 'testbared'
                 }
         }

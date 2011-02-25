@@ -102,15 +102,25 @@ class RedisAuthProxy(LineOnlyReceiver):
             return
 
     def __checkKeys(self, arguments):
-        restricted_keys = []
+        exact_restricted_keys = []
+        startswith_restricted_keys = []
         for argument in arguments:
-            if argument not in self.userconfig['keys']:
-                restricted_keys.append(argument)
-        return restricted_keys
+
+            namespaced = False
+            for skey in self.userconfig['startswith_keys']:
+                if argument.startswith(skey):
+                    namespaced = True
+            if not namespaced:
+                startswith_restricted_keys.append(argument)
+
+            if argument not in self.userconfig['exact_keys']:
+                exact_restricted_keys.append(argument)
+
+        restricted = set(startswith_restricted_keys).intersection(set(exact_restricted_keys))
+        return restricted
 
     def checkKeys(self, command, arguments):
         checked = None
-        print 'USER KEYS', self.userconfig['keys']
         if command in ['MSET', 'MSETNX']:
             # our main interest is arguments with odd indexes
             restricted_keys = self.__checkKeys(arguments[::2])
@@ -145,8 +155,6 @@ class RedisAuthProxy(LineOnlyReceiver):
             line = '$-1'
         if type(line) == 'unicode':
             line = self.safe_unicode(line).encode('utf-8')
-        print type(line)
-        print line
         abstract.FileDescriptor.write(self.transport, str(line.rstrip('\r\n')+self.delimiter))
 
     def sendTerminate(self):
@@ -161,9 +169,9 @@ class RedisAuthProxy(LineOnlyReceiver):
         if args:
             repeats = int(args.groups()[0])-1
             # DL for delimiter
-            acceptable_range = u'\wАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъьэюя'
+            acceptable_range = u'\wАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъьэюя:punct:'
             arg_repeats = unicode('\$\d+DL(['+acceptable_range+']+)DL')*repeats
-            re_val = unicode('^\*\dDL\$\d+DL([a-zA-Z]+)DL'+arg_repeats).replace('DL', '\r\n').encode('utf-8')
+            re_val = unicode('^\*\dDL\$\d+DL([a-zA-Z:punct:]+)DL'+arg_repeats).replace('DL', '\r\n').encode('utf-8')
             regex = re.compile(re_val) # can't replicate effect of acceptable_range with re.U, dunno why
             m = regex.match(self.command)
             if m:
@@ -196,6 +204,7 @@ class RedisAuthProxy(LineOnlyReceiver):
             Authorization procedure
         """
         self.userconfig = self.config.getConfigByPassword(password)
+        print self.userconfig
         # if self.userconfig exists - user exists
         if self.userconfig:
             self.sendLine('+OK')

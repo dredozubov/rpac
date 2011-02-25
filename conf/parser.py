@@ -16,7 +16,8 @@ class ConfigParser(object):
 
     def __calculate_permissions(self, users, default):
         global_commands = set(default['commands_accepted']).difference(set(default['commands_denied']))
-        global_keys = set(default['keys'])
+        exact_global_keys = set(default['exact_keys'])
+        startswith_global_keys = set(default['startswith_keys'])
         for user in users.keys():
             # user commands permissions
             accepted_commands = set(users[user]['commands']['accept'])
@@ -24,8 +25,11 @@ class ConfigParser(object):
             user_can_do = accepted_commands.union(global_commands).symmetric_difference(excluded_commands)
             self.USER_COMMANDS[user] = user_can_do
             # user keys permissions
-            accepted_keys = set(users[user]['keys'])
-            user_can_do_something_with = accepted_keys.union(global_keys)
+            exact_accepted_keys = set(users[user]['exact_keys'])
+            startswith_accepted_keys = set(users[user]['startswith_keys'])
+            user_can_do_something_with = {}
+            user_can_do_something_with['exact'] = exact_accepted_keys.union(exact_global_keys)
+            user_can_do_something_with['startswith'] = startswith_accepted_keys.union(startswith_global_keys)
             self.USER_KEYS[user] = user_can_do_something_with
             # user passwords
             self.USER_PASSWORDS[users[user]['password']] = user # keys are passwords
@@ -36,7 +40,8 @@ class ConfigParser(object):
             config['user'] = user = self.USER_PASSWORDS[password]
             config['password'] = password
             config['commands'] = self.USER_COMMANDS[user]
-            config['keys'] = self.USER_KEYS[user]
+            config['exact_keys'] = self.USER_KEYS[user]['exact']
+            config['startswith_keys'] = self.USER_KEYS[user]['startswith']
         except KeyError:
             pass
         return config
